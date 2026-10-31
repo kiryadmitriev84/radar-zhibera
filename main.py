@@ -1,32 +1,67 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
 import hashlib
 import hmac
 import json
 import os
 import time
-from typing import List, Tuple
+from typing import Dict, List, Set, Tuple
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 import uvicorn
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # =====================================================================
 # НАСТРОЙКИ
 # =====================================================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER").strip()
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВСТАВЬТЕ_СЮДА_ССЫЛКУ").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВСТАВЬТЕ_СЮДА_ССЫЛКУ")
+# Если хотите, чтобы /stats видели только вы — можете добавить ADMIN_ID в Render (ваш Telegram ID)
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
 MARKER_TTL_SECONDS = 20 * 60  # Жизнь метки — ровно 20 минут (1200 секунд)
 
 markers = []
 
+# =====================================================================
+# СТАТИСТИКА ПРОЕКТА
+# =====================================================================
+MSK_TZ = timezone(timedelta(hours=3))
+SERVER_START_TIME = time.time()
+
+stats_all_users: Set[str] = set()               # Уникальные пользователи за всё время работы
+stats_daily_users: Dict[str, Set[str]] = {}     # Уникальные пользователи по дням (YYYY-MM-DD)
+stats_total_markers: int = 0                    # Всего поставлено меток
+stats_daily_markers: Dict[str, int] = {}        # Меток поставлено за день
+
+
+def today_key() -> str:
+    return datetime.now(MSK_TZ).strftime("%Y-%m-%d")
+
+
+def register_user_visit(user_key: str):
+    if not user_key:
+        return
+    stats_all_users.add(user_key)
+    day = today_key()
+    if day not in stats_daily_users:
+        stats_daily_users[day] = set()
+    stats_daily_users[day].add(user_key)
+
+
+def register_marker_created():
+    global stats_total_markers
+    stats_total_markers += 1
+    day = today_key()
+    stats_daily_markers[day] = stats_daily_markers.get(day, 0) + 1
+
 
 def extract_telegram_author(init_data: str, fallback_user: dict | None) -> Tuple[int | None, str, str]:
-    """Проверяет данные пользователя из Telegram WebApp и возвращает (id, имя, username)."""
+    """Проверяет подпись initData от Telegram и возвращает (id, имя, username) автора."""
     if init_data:
         try:
             parsed = dict(parse_qsl(init_data, keep_blank_values=True))
@@ -88,6 +123,16 @@ def clean_old_markers():
     markers = [m for m in markers if now - m["timestamp"] < MARKER_TTL_SECONDS]
 
 
+def format_uptime() -> str:
+    sec = int(time.time() - SERVER_START_TIME)
+    days, rem = divmod(sec, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, _ = divmod(rem, 60)
+    if days > 0:
+        return f"{days} дн. {hours} ч. {mins} мин."
+    return f"{hours} ч. {mins} мин."
+
+
 async def start_bot():
     if BOT_TOKEN.startswith("ВСТАВЬТЕ") or not BOT_TOKEN:
         return
@@ -97,6 +142,9 @@ async def start_bot():
 
         @dp.message(CommandStart())
         async def cmd_start(message: types.Message):
+            if message.from_user:
+                register_user_visit(f"tg_{message.from_user.id}")
+
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🚓 Открыть Радар Жибера",
@@ -113,6 +161,33 @@ async def start_bot():
                 parse_mode="HTML"
             )
 
+        @dp.message(Command("stats"))
+        async def cmd_stats(message: types.Message):
+            # Если задан ADMIN_ID, показываем статистику только владельцу
+            if ADMIN_ID and message.from_user and str(message.from_user.id) != ADMIN_ID:
+                return
+
+            clean_old_markers()
+            day = today_key()
+            online_now = len(manager.active_connections)
+            today_users_count = len(stats_daily_users.get(day, set()))
+            all_users_count = len(stats_all_users)
+            active_markers_now = len(markers)
+            today_markers_count = stats_daily_markers.get(day, 0)
+
+            text = (
+                "📊 <b>Статистика «Радар Жибера»</b>\n\n"
+                f"🟢 <b>Сейчас на карте (онлайн):</b> {online_now} чел.\n"
+                f"👥 <b>Уникальных за сегодня:</b> {today_users_count} чел.\n"
+                f"🌍 <b>Уникальных всего:</b> {all_users_count} чел.\n\n"
+                f"🚓 <b>Активных меток сейчас:</b> {active_markers_now}\n"
+                f"📍 <b>Поставлено за сегодня:</b> {today_markers_count}\n"
+                f"📈 <b>Поставлено всего:</b> {stats_total_markers}\n\n"
+                f"⏱ <b>Аптайм сервера:</b> {format_uptime()}\n"
+                f"🆔 <i>Ваш Telegram ID:</i> <code>{message.from_user.id if message.from_user else ''}</code>"
+            )
+            await message.answer(text, parse_mode="HTML")
+
         await dp.start_polling(bot)
     except Exception as e:
         print(f"Инфо бота: {e}")
@@ -126,6 +201,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/ping")
+async def ping():
+    """Легкий адрес для анти-сна (cron-job.org / UptimeRobot)"""
+    return PlainTextResponse("ok")
 
 
 @app.get("/")
@@ -150,12 +231,26 @@ async def websocket_endpoint(websocket: WebSocket):
             payload = json.loads(data)
             action = payload.get("action")
 
-            if action == "add_marker":
+            # Фиксация входа пользователя на карту для точной статистики /stats
+            if action == "hello":
+                uid, _, _ = extract_telegram_author(
+                    payload.get("init_data", ""),
+                    payload.get("fallback_user")
+                )
+                client_cid = str(payload.get("client_id", "")).strip()[:40]
+                user_key = f"tg_{uid}" if uid else (f"web_{client_cid}" if client_cid else "")
+                register_user_visit(user_key)
+
+            elif action == "add_marker":
                 clean_old_markers()
                 author_id, author_name, author_username = extract_telegram_author(
                     payload.get("init_data", ""),
                     payload.get("fallback_user")
                 )
+                if author_id:
+                    register_user_visit(f"tg_{author_id}")
+                register_marker_created()
+
                 new_marker = {
                     "id": int(time.time() * 1000),
                     "lat": float(payload["lat"]),

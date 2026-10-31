@@ -111,17 +111,17 @@
             display: flex; align-items: center; justify-content: center;
             font-size: 15px; z-index: 2; animation: pulse 2s infinite;
         }
-        /* Плашка со временем прямо НАД меткой — опущена ближе к значку */
+        /* Плашка со временем опущена ближе к значку */
         .dps-time-pill {
-            position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
-            background: rgba(18, 26, 36, 0.92); color: #fff;
-            font-size: 10.5px; font-weight: 600; padding: 1.5px 6px;
-            border-radius: 7px; border: 1px solid rgba(255,255,255,0.28);
+            position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+            background: rgba(18, 26, 36, 0.9); color: #fff;
+            font-size: 11px; font-weight: 600; padding: 2px 7px;
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.28);
             white-space: nowrap; z-index: 5; pointer-events: none;
             box-shadow: 0 2px 5px rgba(0,0,0,0.45);
         }
         .dps-time-pill.standing-pos {
-            top: 8px;
+            top: 9px;
         }
 
         @keyframes pulse {
@@ -130,7 +130,7 @@
             100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0); }
         }
 
-        /* Кнопки голосования и кнопка перехода в профиль автора */
+        /* Кнопки голосования внутри всплывающего окна */
         .vote-row { display: flex; gap: 6px; margin-top: 8px; }
         .vote-btn {
             flex: 1; padding: 6px 8px; border-radius: 7px; border: none;
@@ -140,12 +140,14 @@
         .vote-no { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
         .vote-btn:active { opacity: 0.7; }
 
+        /* Кнопка перехода в профиль автора */
         .author-btn {
-            background: #eef6ff; color: #1565c0; border: 1px solid #bbdefb;
-            border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 600;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
+            display: inline-flex; align-items: center; gap: 4px;
+            background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9;
+            padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
+            cursor: pointer; text-decoration: none;
         }
-        .author-btn:active { background: #dbeafe; }
+        .author-btn:active { background: #bbdefb; }
     </style>
 </head>
 <body>
@@ -199,7 +201,16 @@
         tg.expand();
     }
 
-    // Восстанавливаем последнюю позицию камеры без запроса GPS при каждом открытии
+    // Уникальный анонимный ключ браузера (на случай входа без аккаунта) для статистики
+    let clientId = '';
+    try {
+        clientId = localStorage.getItem('gibert_cid') || '';
+        if (!clientId) {
+            clientId = 'c_' + Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
+            localStorage.setItem('gibert_cid', clientId);
+        }
+    } catch (e) {}
+
     let initialLat = 55.751244, initialLng = 37.618423, initialZoom = 15;
     let hasSavedView = false;
     try {
@@ -212,7 +223,6 @@
         }
     } catch (e) {}
 
-    // attributionControl: false полностью убирает нижнюю правую плашку с флагом
     const map = L.map('map', {
         zoomControl: true,
         attributionControl: false
@@ -227,7 +237,6 @@
         } catch (e) {}
     });
 
-    // Гибридная карта со спутником
     const hybridLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=ru', {
         maxZoom: 20
     });
@@ -252,7 +261,6 @@
         isHybrid = !isHybrid;
     };
 
-    // Умная геолокация без постоянных всплывающих запросов
     let userLocationMarker = null;
     let cachedCoords = null;
 
@@ -308,31 +316,28 @@
         }[m]));
     }
 
-    // Надежное открытие профиля автора по нажатию на кнопку внутри метки
-    window.openAuthorProfile = function(username, userId, authorName) {
-        if (username) {
-            const cleanUser = username.replace(/^@/, '');
-            const url = 'https://t.me/' + cleanUser;
-            if (tg && typeof tg.openTelegramLink === 'function') {
-                tg.openTelegramLink(url);
-                // На ПК (Telegram Desktop) профиль открывается в основном окне позади окна карты
-                if (tg.platform === 'tdesktop' || tg.platform === 'macos') {
-                    const bannerEl = document.getElementById('banner');
-                    bannerEl.innerText = `👤 Профиль @${cleanUser} открыт в окне Telegram`;
-                }
-            } else {
-                window.open(url, '_blank');
-            }
-            return;
-        }
+    // Открытие именно КАРТОЧКИ ПРОФИЛЯ пользователя (с параметром ?profile), а не диалога ЛС!
+    window.openAuthorById = function(markerId) {
+        const entry = renderedMarkers[markerId];
+        if (!entry || !entry.data) return;
+        const m = entry.data;
 
-        if (userId) {
-            const msg = `👤 Автор: ${authorName} (ID: ${userId})\n\nУ этого пользователя в настройках Telegram не указан публичный @username, поэтому прямая ссылка на его профиль скрыта настройками Telegram.`;
-            if (tg && typeof tg.showAlert === 'function') {
-                tg.showAlert(msg);
+        if (m.author_username) {
+            // Официальный параметр ?profile открывает именно страницу профиля (Инфо/Аватарку), а не чат!
+            const profileUrl = 'https://t.me/' + m.author_username + '?profile';
+            if (tg && typeof tg.openTelegramLink === 'function') {
+                tg.openTelegramLink(profileUrl);
             } else {
-                alert(msg);
+                window.open(profileUrl, '_blank');
             }
+        } else if (m.author_id) {
+            // Для пользователей без @username вызываем tg://user?id=...&profile
+            const tgUri = 'tg://user?id=' + m.author_id + '&profile';
+            const a = document.createElement('a');
+            a.href = tgUri;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
     };
 
@@ -353,7 +358,6 @@
         return `${mins} мин. назад`;
     }
 
-    // Продолговатая стрелка направления + плашка времени прямо над меткой
     function createDpsIcon(angle, standing, opacity = 1, timeText = null) {
         const arrowSvg = standing ? '' : `
             <svg class="dps-arrow" style="transform: rotate(${angle}deg);" viewBox="0 0 88 88">
@@ -369,7 +373,7 @@
             className: '',
             iconSize: [88, 88],
             iconAnchor: [44, 44],
-            popupAnchor: [0, -20],
+            popupAnchor: [0, -22],
             html: `
                 <div class="dps-marker-wrap" style="opacity: ${opacity};">
                     ${timePillHtml}
@@ -386,12 +390,12 @@
     function buildAuthorHtml(m) {
         const name = escapeHtml(m.author_name || 'Участник');
         const username = m.author_username ? escapeHtml(m.author_username) : '';
-        const uid = m.author_id ? String(m.author_id) : '';
+        const uid = m.author_id;
 
         if (username) {
-            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorProfile('${username}', '${uid}', '${name}')">@${username} ↗</button></div>`;
+            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorById(${m.id})">@${username} ↗</button></div>`;
         } else if (uid) {
-            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorProfile('', '${uid}', '${name}')">${name} (ID: ${uid}) ℹ️</button></div>`;
+            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorById(${m.id})">${name} (ID: ${uid}) ↗</button></div>`;
         }
         return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: ${name}</div>`;
     }
@@ -416,7 +420,7 @@
                 <span>${statusText}</span>
                 ${commentHtml}
                 ${authorHtml}
-                <div style="margin-top:3px; color:#666; font-size:12px;">🕒 Проверено: ${formatMinutesAgo(m.timestamp)}</div>
+                <div style="margin-top:4px; color:#666; font-size:12px;">🕒 Проверено: ${formatMinutesAgo(m.timestamp)}</div>
                 ${buttonsHtml}
             </div>
         `;
@@ -457,7 +461,6 @@
         }
     }
 
-    // Автообновление плашек времени над метками каждые 20 секунд (и автоудаление старше 20 мин)
     setInterval(() => {
         Object.values(renderedMarkers).forEach(entry => {
             renderOrUpdateMarker(entry.data);
@@ -470,6 +473,22 @@
 
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+
+    ws.onopen = () => {
+        const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+        ws.send(JSON.stringify({
+            action: 'hello',
+            client_id: clientId,
+            init_data: tg ? (tg.initData || '') : '',
+            fallback_user: tgUser ? {
+                id: tgUser.id,
+                first_name: tgUser.first_name || '',
+                last_name: tgUser.last_name || '',
+                username: tgUser.username || ''
+            } : null
+        }));
+    };
+
     ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.event === 'new_marker' || msg.event === 'update_marker') {
