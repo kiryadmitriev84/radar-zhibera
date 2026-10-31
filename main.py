@@ -12,39 +12,27 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # =====================================================================
 # НАСТРОЙКИ
 # =====================================================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВСТАВЬТЕ_СЮДА_ССЫЛКУ")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВСТАВЬТЕ_СЮДА_ССЫЛКУ").strip()
 MARKER_TTL_SECONDS = 20 * 60  # Жизнь метки — ровно 20 минут (1200 секунд)
-
-# Ваши крипто-кошельки для команды /donate или ссылки t.me/ваш_бот?start=donate
-CRYPTO_DONATE_TEXT = os.getenv(
-    "CRYPTO_DONATE_TEXT",
-    "💎 <b>Поддержать проект «Радар Жибера»</b>\n\n"
-    "Нажмите на адрес, чтобы скопировать:\n\n"
-    "🔹 <b>USDT (TRC20):</b>\n<code>ВСТАВЬТЕ_ВАШ_USDT_АДРЕС</code>\n\n"
-    "🔹 <b>TON:</b>\n<code>ВСТАВЬТЕ_ВАШ_TON_АДРЕС</code>\n\n"
-    "🔹 <b>BTC:</b>\n<code>ВСТАВЬТЕ_ВАШ_BTC_АДРЕС</code>\n\n"
-    "Спасибо за поддержку! 🚕"
-)
 
 markers = []
 
 
 def extract_telegram_author(init_data: str, fallback_user: dict | None) -> Tuple[int | None, str, str]:
-    """Проверяет подпись initData от Telegram и возвращает (id, имя, username) автора метки."""
+    """Проверяет данные пользователя из Telegram WebApp и возвращает (id, имя, username)."""
     if init_data:
         try:
             parsed = dict(parse_qsl(init_data, keep_blank_values=True))
             received_hash = parsed.pop("hash", "")
             user_json = parsed.get("user")
             if user_json:
-                # Если задан реальный BOT_TOKEN — проверяем криптографическую подпись Telegram
                 valid = True
                 if BOT_TOKEN and not BOT_TOKEN.startswith("ВСТАВЬТЕ") and received_hash:
                     data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
@@ -109,12 +97,6 @@ async def start_bot():
 
         @dp.message(CommandStart())
         async def cmd_start(message: types.Message):
-            # Если пользователь перешел по ссылке t.me/бот?start=donate из описания профиля
-            parts = (message.text or "").split(maxsplit=1)
-            if len(parts) > 1 and parts[1].strip().lower() == "donate":
-                await message.answer(CRYPTO_DONATE_TEXT, parse_mode="HTML")
-                return
-
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🚓 Открыть Радар Жибера",
@@ -130,10 +112,6 @@ async def start_bot():
                 reply_markup=kb,
                 parse_mode="HTML"
             )
-
-        @dp.message(Command("donate"))
-        async def cmd_donate(message: types.Message):
-            await message.answer(CRYPTO_DONATE_TEXT, parse_mode="HTML")
 
         await dp.start_polling(bot)
     except Exception as e:

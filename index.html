@@ -111,17 +111,17 @@
             display: flex; align-items: center; justify-content: center;
             font-size: 15px; z-index: 2; animation: pulse 2s infinite;
         }
-        /* Плашка со временем прямо НАД меткой */
+        /* Плашка со временем прямо НАД меткой — опущена ближе к значку */
         .dps-time-pill {
-            position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
-            background: rgba(18, 26, 36, 0.9); color: #fff;
-            font-size: 11px; font-weight: 600; padding: 2px 7px;
-            border-radius: 8px; border: 1px solid rgba(255,255,255,0.28);
+            position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+            background: rgba(18, 26, 36, 0.92); color: #fff;
+            font-size: 10.5px; font-weight: 600; padding: 1.5px 6px;
+            border-radius: 7px; border: 1px solid rgba(255,255,255,0.28);
             white-space: nowrap; z-index: 5; pointer-events: none;
             box-shadow: 0 2px 5px rgba(0,0,0,0.45);
         }
         .dps-time-pill.standing-pos {
-            top: 4px;
+            top: 8px;
         }
 
         @keyframes pulse {
@@ -130,7 +130,7 @@
             100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0); }
         }
 
-        /* Кнопки голосования внутри всплывающего окна */
+        /* Кнопки голосования и кнопка перехода в профиль автора */
         .vote-row { display: flex; gap: 6px; margin-top: 8px; }
         .vote-btn {
             flex: 1; padding: 6px 8px; border-radius: 7px; border: none;
@@ -139,8 +139,13 @@
         .vote-yes { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
         .vote-no { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
         .vote-btn:active { opacity: 0.7; }
-        .author-link { color: #1e88e5; font-weight: 600; text-decoration: none; }
-        .author-link:hover { text-decoration: underline; }
+
+        .author-btn {
+            background: #eef6ff; color: #1565c0; border: 1px solid #bbdefb;
+            border-radius: 6px; padding: 2px 7px; font-size: 12px; font-weight: 600;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
+        }
+        .author-btn:active { background: #dbeafe; }
     </style>
 </head>
 <body>
@@ -264,13 +269,11 @@
     }
 
     function locateUser() {
-        // Если уже определяли координаты менее 3 минут назад — перелетаем мгновенно без диалога!
         if (cachedCoords && (Date.now() - cachedCoords.ts < 180000)) {
             showUserOnMap(cachedCoords.lat, cachedCoords.lng);
             return;
         }
 
-        // Если доступен встроенный LocationManager в Telegram (запоминает разрешение навсегда)
         if (tg && tg.LocationManager && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) {
             tg.LocationManager.init(() => {
                 if (tg.LocationManager.isLocationAvailable) {
@@ -284,7 +287,6 @@
             return;
         }
 
-        // Обычная геолокация с кэшированием на 5 минут
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 (pos) => showUserOnMap(pos.coords.latitude, pos.coords.longitude),
@@ -294,7 +296,6 @@
         }
     }
 
-    // При самом первом открытии в жизни (если город еще не сохранен) пробуем найти город
     if (!hasSavedView) {
         locateUser();
     }
@@ -307,11 +308,31 @@
         }[m]));
     }
 
-    // Открытие профиля автора метки в Telegram
-    window.openAuthorProfile = function(event, username, userId) {
-        if (username && tg && tg.openTelegramLink) {
-            event.preventDefault();
-            tg.openTelegramLink('https://t.me/' + username);
+    // Надежное открытие профиля автора по нажатию на кнопку внутри метки
+    window.openAuthorProfile = function(username, userId, authorName) {
+        if (username) {
+            const cleanUser = username.replace(/^@/, '');
+            const url = 'https://t.me/' + cleanUser;
+            if (tg && typeof tg.openTelegramLink === 'function') {
+                tg.openTelegramLink(url);
+                // На ПК (Telegram Desktop) профиль открывается в основном окне позади окна карты
+                if (tg.platform === 'tdesktop' || tg.platform === 'macos') {
+                    const bannerEl = document.getElementById('banner');
+                    bannerEl.innerText = `👤 Профиль @${cleanUser} открыт в окне Telegram`;
+                }
+            } else {
+                window.open(url, '_blank');
+            }
+            return;
+        }
+
+        if (userId) {
+            const msg = `👤 Автор: ${authorName} (ID: ${userId})\n\nУ этого пользователя в настройках Telegram не указан публичный @username, поэтому прямая ссылка на его профиль скрыта настройками Telegram.`;
+            if (tg && typeof tg.showAlert === 'function') {
+                tg.showAlert(msg);
+            } else {
+                alert(msg);
+            }
         }
     };
 
@@ -348,7 +369,7 @@
             className: '',
             iconSize: [88, 88],
             iconAnchor: [44, 44],
-            popupAnchor: [0, -24],
+            popupAnchor: [0, -20],
             html: `
                 <div class="dps-marker-wrap" style="opacity: ${opacity};">
                     ${timePillHtml}
@@ -365,14 +386,14 @@
     function buildAuthorHtml(m) {
         const name = escapeHtml(m.author_name || 'Участник');
         const username = m.author_username ? escapeHtml(m.author_username) : '';
-        const uid = m.author_id;
+        const uid = m.author_id ? String(m.author_id) : '';
 
         if (username) {
-            return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: <a class="author-link" href="https://t.me/${username}" target="_blank" onclick="openAuthorProfile(event, '${username}', '${uid || ''}')">@${username}</a></div>`;
+            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorProfile('${username}', '${uid}', '${name}')">@${username} ↗</button></div>`;
         } else if (uid) {
-            return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: <a class="author-link" href="tg://user?id=${uid}">${name}</a></div>`;
+            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorProfile('', '${uid}', '${name}')">${name} (ID: ${uid}) ℹ️</button></div>`;
         }
-        return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: ${name}</div>`;
+        return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: ${name}</div>`;
     }
 
     function buildPopupHtml(m) {
