@@ -6,7 +6,7 @@
     <title>Радар Жибера</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js" async onerror="console.log('Открыто вне Telegram')"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body, html { width: 100vw; height: 100vh; overflow: hidden; background: #18222d; }
@@ -47,6 +47,7 @@
             transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
             box-shadow: 0 -6px 25px rgba(0,0,0,0.5);
             max-width: 560px; margin: 0 auto;
+            max-height: 90vh; overflow-y: auto;
         }
         .bottom-sheet.open { transform: translateY(0); }
         .sheet-title { font-size: 16px; font-weight: 700; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
@@ -79,9 +80,12 @@
         .tag-btn:hover { background: #2b5278; color: #fff; }
         .comment-input {
             width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #34495e;
-            background: #16212c; color: #fff; font-size: 13px; margin-bottom: 12px; outline: none;
+            background: #16212c; color: #fff; font-size: 13px; margin-bottom: 6px; outline: none;
         }
         .comment-input:focus { border-color: #4ea4f5; }
+        .rules-note {
+            font-size: 11.5px; color: #ffb74d; margin-bottom: 12px; line-height: 1.35;
+        }
 
         .submit-btn {
             width: 100%; padding: 14px; border-radius: 12px; border: none;
@@ -90,22 +94,36 @@
         }
         .submit-btn:active { transform: scale(0.98); }
 
-        /* Стили маркера Комиссара на карте */
+        /* Стили маркера Комиссара на карте (88x88 для длинной стрелки) */
         .dps-marker-wrap {
-            position: relative; width: 52px; height: 52px;
+            position: relative; width: 88px; height: 88px;
             display: flex; align-items: center; justify-content: center;
         }
         .dps-arrow {
-            position: absolute; width: 52px; height: 52px; top: 0; left: 0;
-            transition: transform 0.08s linear; pointer-events: none;
+            position: absolute; width: 88px; height: 88px; top: 0; left: 0;
+            transition: transform 0.08s linear; pointer-events: none; z-index: 1;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.65));
         }
         .dps-badge {
             width: 30px; height: 30px; border-radius: 50%;
             background: #e53935; border: 2.5px solid #fff;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.55);
             display: flex; align-items: center; justify-content: center;
             font-size: 15px; z-index: 2; animation: pulse 2s infinite;
         }
+        /* Плашка со временем прямо НАД меткой */
+        .dps-time-pill {
+            position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+            background: rgba(18, 26, 36, 0.9); color: #fff;
+            font-size: 11px; font-weight: 600; padding: 2px 7px;
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.28);
+            white-space: nowrap; z-index: 5; pointer-events: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.45);
+        }
+        .dps-time-pill.standing-pos {
+            top: 4px;
+        }
+
         @keyframes pulse {
             0% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0.7); }
             70% { box-shadow: 0 0 0 10px rgba(229, 57, 53, 0); }
@@ -121,6 +139,8 @@
         .vote-yes { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
         .vote-no { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
         .vote-btn:active { opacity: 0.7; }
+        .author-link { color: #1e88e5; font-weight: 600; text-decoration: none; }
+        .author-link:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -161,31 +181,56 @@
         <button type="button" class="tag-btn" data-text="Два экипажа">2 экипажа</button>
         <button type="button" class="tag-btn" data-text="Оформляют ДТП">ДТП</button>
     </div>
-    <input type="text" id="commentInput" class="comment-input" placeholder="Или напишите своё (например: в кустах за поворотом)">
+    <input type="text" id="commentInput" class="comment-input" placeholder="Или напишите своё (например: на парковке Монетки)">
+    <div class="rules-note">⚠️ Любые оскорбления и мат строго недопустимы</div>
 
     <button class="submit-btn" id="sendBtn">Отправить на карту всем</button>
 </div>
 
 <script>
-    if (window.Telegram && window.Telegram.WebApp) {
-        window.Telegram.WebApp.expand();
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    if (tg) {
+        tg.ready();
+        tg.expand();
     }
 
-    const map = L.map('map', { zoomControl: true }).setView([55.751244, 37.618423], 15);
+    // Восстанавливаем последнюю позицию камеры без запроса GPS при каждом открытии
+    let initialLat = 55.751244, initialLng = 37.618423, initialZoom = 15;
+    let hasSavedView = false;
+    try {
+        const saved = JSON.parse(localStorage.getItem('gibert_last_view'));
+        if (saved && saved.lat && saved.lng) {
+            initialLat = saved.lat;
+            initialLng = saved.lng;
+            initialZoom = saved.zoom || 15;
+            hasSavedView = true;
+        }
+    } catch (e) {}
 
-    // 1. ГИБРИДНАЯ КАРТА СО СПУТНИКОМ ПО УМОЛЧАНИЮ (Google Hybrid: спутник + названия улиц и домов на русском)
+    // attributionControl: false полностью убирает нижнюю правую плашку с флагом
+    const map = L.map('map', {
+        zoomControl: true,
+        attributionControl: false
+    }).setView([initialLat, initialLng], initialZoom);
+
+    map.on('moveend', () => {
+        try {
+            const c = map.getCenter();
+            localStorage.setItem('gibert_last_view', JSON.stringify({
+                lat: c.lat, lng: c.lng, zoom: map.getZoom()
+            }));
+        } catch (e) {}
+    });
+
+    // Гибридная карта со спутником
     const hybridLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=ru', {
-        attribution: '© Спутник Гибрид',
         maxZoom: 20
     });
 
-    // Запасной слой обычной схемы (можно переключить кнопкой 🛰️ справа)
     const schemeLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap',
         maxZoom: 19
     });
 
-    // Включаем Гибрид со спутником сразу при входе
     let isHybrid = true;
     hybridLayer.addTo(map);
 
@@ -202,24 +247,74 @@
         isHybrid = !isHybrid;
     };
 
-    function locateUser() {
-        if (!navigator.geolocation) return;
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const { latitude, longitude } = pos.coords;
-                map.setView([latitude, longitude], 17);
-                L.circleMarker([latitude, longitude], {
-                    radius: 8, color: '#fff', weight: 3, fillColor: '#3390ec', fillOpacity: 1
-                }).addTo(map).bindPopup("📍 Вы сейчас здесь");
-            },
-            () => {},
-            { enableHighAccuracy: true, timeout: 7000 }
-        );
+    // Умная геолокация без постоянных всплывающих запросов
+    let userLocationMarker = null;
+    let cachedCoords = null;
+
+    function showUserOnMap(lat, lng) {
+        cachedCoords = { lat, lng, ts: Date.now() };
+        map.setView([lat, lng], 17);
+        if (userLocationMarker) {
+            userLocationMarker.setLatLng([lat, lng]);
+        } else {
+            userLocationMarker = L.circleMarker([lat, lng], {
+                radius: 8, color: '#fff', weight: 3, fillColor: '#3390ec', fillOpacity: 1
+            }).addTo(map).bindPopup("📍 Вы сейчас здесь");
+        }
     }
-    locateUser();
+
+    function locateUser() {
+        // Если уже определяли координаты менее 3 минут назад — перелетаем мгновенно без диалога!
+        if (cachedCoords && (Date.now() - cachedCoords.ts < 180000)) {
+            showUserOnMap(cachedCoords.lat, cachedCoords.lng);
+            return;
+        }
+
+        // Если доступен встроенный LocationManager в Telegram (запоминает разрешение навсегда)
+        if (tg && tg.LocationManager && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) {
+            tg.LocationManager.init(() => {
+                if (tg.LocationManager.isLocationAvailable) {
+                    tg.LocationManager.getLocation((loc) => {
+                        if (loc && loc.latitude && loc.longitude) {
+                            showUserOnMap(loc.latitude, loc.longitude);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+
+        // Обычная геолокация с кэшированием на 5 минут
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => showUserOnMap(pos.coords.latitude, pos.coords.longitude),
+                () => {},
+                { enableHighAccuracy: true, timeout: 7000, maximumAge: 300000 }
+            );
+        }
+    }
+
+    // При самом первом открытии в жизни (если город еще не сохранен) пробуем найти город
+    if (!hasSavedView) {
+        locateUser();
+    }
     document.getElementById('locateBtn').onclick = locateUser;
 
-    // Расчет угла (азимута) от точки 1 (машина) к точке 2 (куда поехала)
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/[&<>"']/g, m => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[m]));
+    }
+
+    // Открытие профиля автора метки в Telegram
+    window.openAuthorProfile = function(event, username, userId) {
+        if (username && tg && tg.openTelegramLink) {
+            event.preventDefault();
+            tg.openTelegramLink('https://t.me/' + username);
+        }
+    };
+
     function calculateBearing(lat1, lng1, lat2, lng2) {
         const toRad = d => d * Math.PI / 180;
         const toDeg = r => r * 180 / Math.PI;
@@ -230,30 +325,6 @@
         return Math.round((toDeg(Math.atan2(y, x)) + 360) % 360);
     }
 
-    // Иконка Комиссара со стрелкой направления
-    function createDpsIcon(angle, standing, opacity = 1) {
-        const arrowSvg = standing ? '' : `
-            <svg class="dps-arrow" style="transform: rotate(${angle}deg);" viewBox="0 0 52 52">
-                <path d="M26 0 L35 15 L17 15 Z" fill="#ffeb3b" stroke="#000" stroke-width="1.5"/>
-            </svg>
-        `;
-        return L.divIcon({
-            className: '',
-            iconSize: [52, 52],
-            iconAnchor: [26, 26],
-            html: `
-                <div class="dps-marker-wrap" style="opacity: ${opacity};">
-                    ${arrowSvg}
-                    <div class="dps-badge">🚓</div>
-                </div>
-            `
-        });
-    }
-
-    // Хранилище отрисованных меток
-    const renderedMarkers = {};
-    const votedMarkers = new Set();
-
     function formatMinutesAgo(timestamp) {
         const diffSec = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
         const mins = Math.floor(diffSec / 60);
@@ -261,24 +332,70 @@
         return `${mins} мин. назад`;
     }
 
+    // Продолговатая стрелка направления + плашка времени прямо над меткой
+    function createDpsIcon(angle, standing, opacity = 1, timeText = null) {
+        const arrowSvg = standing ? '' : `
+            <svg class="dps-arrow" style="transform: rotate(${angle}deg);" viewBox="0 0 88 88">
+                <path d="M40.5 30 L40.5 14 L33 16.5 L44 1 L55 16.5 L47.5 14 L47.5 30 Z"
+                      fill="#ffeb3b" stroke="#111" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+        `;
+        const timePillHtml = timeText
+            ? `<div class="dps-time-pill ${standing ? 'standing-pos' : ''}">${timeText}</div>`
+            : '';
+
+        return L.divIcon({
+            className: '',
+            iconSize: [88, 88],
+            iconAnchor: [44, 44],
+            popupAnchor: [0, -24],
+            html: `
+                <div class="dps-marker-wrap" style="opacity: ${opacity};">
+                    ${timePillHtml}
+                    ${arrowSvg}
+                    <div class="dps-badge">🚓</div>
+                </div>
+            `
+        });
+    }
+
+    const renderedMarkers = {};
+    const votedMarkers = new Set();
+
+    function buildAuthorHtml(m) {
+        const name = escapeHtml(m.author_name || 'Участник');
+        const username = m.author_username ? escapeHtml(m.author_username) : '';
+        const uid = m.author_id;
+
+        if (username) {
+            return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: <a class="author-link" href="https://t.me/${username}" target="_blank" onclick="openAuthorProfile(event, '${username}', '${uid || ''}')">@${username}</a></div>`;
+        } else if (uid) {
+            return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: <a class="author-link" href="tg://user?id=${uid}">${name}</a></div>`;
+        }
+        return `<div style="margin-top:4px; font-size:12px; color:#555;">👤 Автор: ${name}</div>`;
+    }
+
     function buildPopupHtml(m) {
         const statusText = m.standing ? "🛑 Эмильен стоит на месте" : "➡️ Ехали по стрелке";
-        const commentHtml = m.comment ? `<div style="margin-top:4px; padding:4px 7px; background:#f3f4f6; border-radius:6px; font-size:12px; color:#333;">💬 ${m.comment}</div>` : '';
+        const safeComment = escapeHtml(m.comment);
+        const commentHtml = safeComment ? `<div style="margin-top:4px; padding:4px 7px; background:#f3f4f6; border-radius:6px; font-size:12px; color:#333;">💬 ${safeComment}</div>` : '';
+        const authorHtml = buildAuthorHtml(m);
         const voted = votedMarkers.has(m.id);
 
         const buttonsHtml = voted
             ? `<div style="margin-top:6px; font-size:12px; color:#2e7d32; font-weight:600;">✅ Спасибо, ваш голос учтен!</div>`
             : `<div class="vote-row">
                    <button class="vote-btn vote-yes" onclick="voteMarker(${m.id}, 'confirm')">👍 Ещё тут (${m.confirms || 1})</button>
-                   <button class="vote-btn vote-no" onclick="voteMarker(${m.id}, 'deny')">👎 Уехали (${m.denials || 0}/2)</button>
+                   <button class="vote-btn vote-no" onclick="voteMarker(${m.id}, 'deny')">👎 Уехали (Фейк) (${m.denials || 0}/2)</button>
                </div>`;
 
         return `
-            <div style="font-size:14px; line-height:1.45; min-width:195px;">
-                <b>🚓 ${m.car_model}</b><br>
+            <div style="font-size:14px; line-height:1.45; min-width:210px;">
+                <b>🚓 ${escapeHtml(m.car_model)}</b><br>
                 <span>${statusText}</span>
                 ${commentHtml}
-                <div style="margin-top:4px; color:#666; font-size:12px;">🕒 Проверено: ${formatMinutesAgo(m.timestamp)}</div>
+                ${authorHtml}
+                <div style="margin-top:3px; color:#666; font-size:12px;">🕒 Проверено: ${formatMinutesAgo(m.timestamp)}</div>
                 ${buttonsHtml}
             </div>
         `;
@@ -286,20 +403,27 @@
 
     function renderOrUpdateMarker(m) {
         const ageMinutes = (Date.now() / 1000 - m.timestamp) / 60;
-        const opacity = Math.max(0.35, 1 - ageMinutes / 35);
+        if (ageMinutes >= 20) {
+            removeMarkerFromMap(m.id);
+            return;
+        }
+        const opacity = Math.max(0.4, 1 - ageMinutes / 22);
+        const timeText = formatMinutesAgo(m.timestamp);
 
         if (renderedMarkers[m.id]) {
             const entry = renderedMarkers[m.id];
             entry.data = m;
-            entry.marker.setIcon(createDpsIcon(m.angle, m.standing, opacity));
+            entry.marker.setIcon(createDpsIcon(m.angle, m.standing, opacity, timeText));
             entry.marker.setPopupContent(buildPopupHtml(m));
         } else {
             const marker = L.marker([m.lat, m.lng], {
-                icon: createDpsIcon(m.angle, m.standing, opacity)
+                icon: createDpsIcon(m.angle, m.standing, opacity, timeText)
             }).addTo(map);
             marker.bindPopup(buildPopupHtml(m));
             marker.on('popupopen', () => {
-                marker.setPopupContent(buildPopupHtml(renderedMarkers[m.id].data));
+                if (renderedMarkers[m.id]) {
+                    marker.setPopupContent(buildPopupHtml(renderedMarkers[m.id].data));
+                }
             });
             renderedMarkers[m.id] = { marker, data: m };
         }
@@ -312,11 +436,17 @@
         }
     }
 
+    // Автообновление плашек времени над метками каждые 20 секунд (и автоудаление старше 20 мин)
+    setInterval(() => {
+        Object.values(renderedMarkers).forEach(entry => {
+            renderOrUpdateMarker(entry.data);
+        });
+    }, 20000);
+
     fetch('/api/markers')
         .then(r => r.json())
         .then(data => data.markers.forEach(renderOrUpdateMarker));
 
-    // WebSocket для мгновенного обновления
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
     ws.onmessage = (event) => {
@@ -357,7 +487,7 @@
             selectedLatLng = e.latlng;
             standingCheck.checked = false;
             previewMarker = L.marker(selectedLatLng, {
-                icon: createDpsIcon(currentAngle, false, 1)
+                icon: createDpsIcon(currentAngle, false, 1, null)
             }).addTo(map);
 
             sheet.classList.add('open');
@@ -369,7 +499,7 @@
                 standingCheck.checked = false;
             }
             currentAngle = calculateBearing(selectedLatLng.lat, selectedLatLng.lng, e.latlng.lat, e.latlng.lng);
-            previewMarker.setIcon(createDpsIcon(currentAngle, false, 1));
+            previewMarker.setIcon(createDpsIcon(currentAngle, false, 1, null));
 
             if (directionLine) map.removeLayer(directionLine);
             directionLine = L.polyline([selectedLatLng, e.latlng], {
@@ -385,7 +515,7 @@
     standingCheck.onchange = () => {
         if (!previewMarker) return;
         const standing = standingCheck.checked;
-        previewMarker.setIcon(createDpsIcon(currentAngle, standing, 1));
+        previewMarker.setIcon(createDpsIcon(currentAngle, standing, 1, null));
         if (standing && directionLine) {
             map.removeLayer(directionLine);
             directionLine = null;
@@ -423,6 +553,9 @@
 
     document.getElementById('sendBtn').onclick = () => {
         if (!selectedLatLng) return;
+
+        const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+
         ws.send(JSON.stringify({
             action: 'add_marker',
             lat: selectedLatLng.lat,
@@ -430,7 +563,14 @@
             angle: currentAngle,
             car_model: selectedCar,
             standing: standingCheck.checked,
-            comment: commentInput.value
+            comment: commentInput.value,
+            init_data: tg ? (tg.initData || '') : '',
+            fallback_user: tgUser ? {
+                id: tgUser.id,
+                first_name: tgUser.first_name || '',
+                last_name: tgUser.last_name || '',
+                username: tgUser.username || ''
+            } : null
         }));
         resetDraft();
         banner.innerText = "✅ Метка опубликована! Другие уже видят её";
