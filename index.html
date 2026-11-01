@@ -4,718 +4,92 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Радар Жибера</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
-    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+    <!-- Быстрая загрузка библиотек -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Резервный канал синхронизации в реальном времени (если провайдер режет прямой доступ к onrender.com) -->
-    <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
         body, html { width: 100vw; height: 100vh; overflow: hidden; background: #18222d; }
-        #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; background: #111a22; }
+        #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; }
 
-        /* Верхняя плашка с подсказкой */
         .top-banner {
             position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
-            background: rgba(24, 34, 45, 0.94); color: #fff; padding: 10px 18px;
-            border-radius: 22px; font-size: 13px; font-weight: 600; z-index: 1000;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.45); text-align: center;
-            backdrop-filter: blur(6px); max-width: 92vw; transition: background 0.2s;
-        }
-        .top-banner.highlight { background: #e65100; }
-
-        /* Переключатель режима карты (Гибрид / Схема) */
-        .layer-btn {
-            position: fixed; bottom: 148px; right: 16px; width: 48px; height: 48px;
-            border-radius: 50%; background: rgba(24, 34, 45, 0.92); color: #fff;
-            border: 2px solid rgba(255,255,255,0.25); z-index: 1000;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.35); font-size: 20px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+            background: rgba(24, 34, 45, 0.95); color: #fff; padding: 8px 16px;
+            border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5); text-align: center;
         }
 
-        /* Кнопка "Мое местоположение" */
-        .locate-btn {
-            position: fixed; bottom: 90px; right: 16px; width: 48px; height: 48px;
-            border-radius: 50%; background: #fff; border: none; z-index: 1000;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.35); font-size: 22px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+        .action-btn {
+            position: fixed; bottom: 20px; right: 20px; width: 50px; height: 50px;
+            border-radius: 50%; background: #3390ec; color: #fff; z-index: 1000;
+            border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 24px;
         }
 
-        /* Нижняя панель добавления метки */
-        .bottom-sheet {
-            position: fixed; bottom: 0; left: 0; right: 0;
-            background: #1e2c3a; color: #fff; border-radius: 20px 20px 0 0;
-            padding: 16px 18px 20px; z-index: 1001; transform: translateY(110%);
-            transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-            box-shadow: 0 -6px 25px rgba(0,0,0,0.5);
-            max-width: 560px; margin: 0 auto;
-            max-height: 90vh; overflow-y: auto;
-        }
-        .bottom-sheet.open { transform: translateY(0); }
-        .sheet-title { font-size: 16px; font-weight: 700; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
-        .close-btn { background: none; border: none; color: #8a9aa9; font-size: 20px; cursor: pointer; }
-
-        .label { font-size: 12px; color: #8a9aa9; margin-bottom: 6px; display: block; }
-        
-        /* Кнопки выбора марки машины */
-        .car-grid { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
-        .car-chip {
-            padding: 7px 11px; border-radius: 10px; background: #2b3e50; color: #d0dce8;
-            border: 2px solid transparent; font-size: 13px; cursor: pointer; font-weight: 500;
-        }
-        .car-chip.active { background: #2b5278; border-color: #4ea4f5; color: #fff; }
-
-        /* Блок статуса направления */
-        .direction-box { background: #253545; padding: 10px 12px; border-radius: 12px; margin-bottom: 12px; }
-        .dir-hint { font-size: 13px; color: #ffeb3b; font-weight: 500; margin-bottom: 6px; }
-        .standing-toggle {
-            display: flex; align-items: center; gap: 8px;
-            font-size: 13px; color: #d0dce8; cursor: pointer;
-        }
-
-        /* Быстрые теги и комментарий */
-        .quick-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-        .tag-btn {
-            padding: 5px 9px; border-radius: 8px; background: #253545; color: #9ab0c4;
-            border: 1px solid #34495e; font-size: 12px; cursor: pointer;
-        }
-        .tag-btn:hover { background: #2b5278; color: #fff; }
-        .comment-input {
-            width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #34495e;
-            background: #16212c; color: #fff; font-size: 13px; margin-bottom: 6px; outline: none;
-        }
-        .comment-input:focus { border-color: #4ea4f5; }
-        .rules-note {
-            font-size: 11.5px; color: #ffb74d; margin-bottom: 12px; line-height: 1.35;
-        }
-
-        .submit-btn {
-            width: 100%; padding: 14px; border-radius: 12px; border: none;
-            background: #3390ec; color: #fff; font-size: 15px; font-weight: 700;
-            cursor: pointer; box-shadow: 0 4px 12px rgba(51, 144, 236, 0.4);
-        }
-        .submit-btn:active { transform: scale(0.98); }
-
-        /* Стили маркера Комиссара на карте (88x88 для длинной стрелки) */
-        .dps-marker-wrap {
-            position: relative; width: 88px; height: 88px;
-            display: flex; align-items: center; justify-content: center;
-        }
-        .dps-arrow {
-            position: absolute; width: 88px; height: 88px; top: 0; left: 0;
-            transition: transform 0.08s linear; pointer-events: none; z-index: 1;
-            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.65));
-        }
         .dps-badge {
-            width: 30px; height: 30px; border-radius: 50%;
-            background: #e53935; border: 2.5px solid #fff;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.55);
-            display: flex; align-items: center; justify-content: center;
-            font-size: 15px; z-index: 2; animation: pulse 2s infinite;
+            width: 30px; height: 30px; border-radius: 50%; background: #e53935;
+            border: 2px solid #fff; display: flex; align-items: center; justify-content: center;
+            font-size: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.5);
         }
-        /* Плашка со временем опущена ближе к значку */
         .dps-time-pill {
-            position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
-            background: rgba(18, 26, 36, 0.9); color: #fff;
-            font-size: 11px; font-weight: 600; padding: 2px 7px;
-            border-radius: 8px; border: 1px solid rgba(255,255,255,0.28);
-            white-space: nowrap; z-index: 5; pointer-events: none;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.45);
+            position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 5px;
         }
-        .dps-time-pill.standing-pos {
-            top: 9px;
-        }
-
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(229, 57, 53, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0); }
-        }
-
-        /* Кнопки голосования внутри всплывающего окна */
-        .vote-row { display: flex; gap: 6px; margin-top: 8px; }
-        .vote-btn {
-            flex: 1; padding: 6px 8px; border-radius: 7px; border: none;
-            font-size: 12px; font-weight: 600; cursor: pointer;
-        }
-        .vote-yes { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
-        .vote-no { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
-        .vote-btn:active { opacity: 0.7; }
-
-        /* Кнопка перехода в профиль автора */
-        .author-btn {
-            display: inline-flex; align-items: center; gap: 4px;
-            background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9;
-            padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
-            cursor: pointer; text-decoration: none;
-        }
-        .author-btn:active { background: #bbdefb; }
     </style>
 </head>
 <body>
 
-<div class="top-banner" id="banner">👆 1-й клик по карте — где видели Комиссара</div>
-<button class="layer-btn" id="layerBtn" title="Спутник / Схема">🛰️</button>
-<button class="locate-btn" id="locateBtn" title="Где я">📍</button>
+<div class="top-banner" id="banner">Загрузка радара...</div>
 <div id="map"></div>
-
-<!-- Нижняя шторка настройки метки -->
-<div class="bottom-sheet" id="sheet">
-    <div class="sheet-title">
-        <span>🚓 Новая метка Комиссара</span>
-        <button class="close-btn" id="closeSheet">✕</button>
-    </div>
-
-    <div class="direction-box">
-        <div class="dir-hint" id="dirHint">👉 Нажмите 2-й раз на карту в сторону, куда поехала машина!</div>
-        <label class="standing-toggle">
-            <input type="checkbox" id="standingCheck">
-            <span>Машина стоит на месте</span>
-        </label>
-    </div>
-
-    <span class="label">Марка машины:</span>
-    <div class="car-grid" id="carGrid">
-        <button class="car-chip active" data-car="Lada Granta">Lada Granta</button>
-        <button class="car-chip" data-car="УАЗ Patriot">УАЗ Patriot</button>
-        <button class="car-chip" data-car="Haval">Haval</button>
-        <button class="car-chip" data-car="Росгвардия">Росгвардия</button>
-        <button class="car-chip" data-car="Не знаю">Не знаю</button>
-        <button class="car-chip" data-car="Другое">Другое</button>
-    </div>
-
-    <span class="label">Комментарий (по желанию):</span>
-    <div class="quick-tags">
-        <button type="button" class="tag-btn" data-text="Тормозят всех подряд">Тормозят всех</button>
-        <button type="button" class="tag-btn" data-text="Два экипажа">2 экипажа</button>
-        <button type="button" class="tag-btn" data-text="Оформляют ДТП">ДТП</button>
-    </div>
-    <input type="text" id="commentInput" class="comment-input" placeholder="Или напишите своё (например: на парковке Монетки)">
-    <div class="rules-note">⚠️ Любые оскорбления и мат строго недопустимы</div>
-
-    <button class="submit-btn" id="sendBtn">Отправить на карту всем</button>
-</div>
+<button class="action-btn" onclick="locateUser()">📍</button>
 
 <script>
-    // Основной сервер Render + синхронизация через глобальный WebSocket-канал (работает без VPN у всех провайдеров РФ!)
-    const RENDER_HTTP = "https://radar-zhibera.onrender.com";
-    const RENDER_WS = "wss://radar-zhibera.onrender.com/ws";
-    const MQTT_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    const MQTT_TOPIC_PREFIX = "radar_zhibera_v1/markers/";
-
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-    if (tg) {
-        tg.ready();
-        tg.expand();
-    }
+    if (tg) { tg.ready(); tg.expand(); }
 
-    let clientId = '';
-    try {
-        clientId = localStorage.getItem('gibert_cid') || '';
-        if (!clientId) {
-            clientId = 'c_' + Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
-            localStorage.setItem('gibert_cid', clientId);
-        }
-    } catch (e) {}
+    const map = L.map('map', { attributionControl: false }).setView([55.7512, 37.6184], 15);
+    L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=ru', { maxZoom: 20 }).addTo(map);
 
-    let initialLat = 55.751244, initialLng = 37.618423, initialZoom = 15;
-    let hasSavedView = false;
-    try {
-        const saved = JSON.parse(localStorage.getItem('gibert_last_view'));
-        if (saved && saved.lat && saved.lng) {
-            initialLat = saved.lat;
-            initialLng = saved.lng;
-            initialZoom = saved.zoom || 15;
-            hasSavedView = true;
-        }
-    } catch (e) {}
+    const renderedMarkers = {};
+    const mqttClient = mqtt.connect("wss://broker.emqx.io:8084/mqtt", { clientId: 'gib_' + Math.random().toString(16).slice(2, 10) });
 
-    const map = L.map('map', {
-        zoomControl: true,
-        attributionControl: false
-    }).setView([initialLat, initialLng], initialZoom);
+    mqttClient.on('connect', () => {
+        document.getElementById('banner').innerText = "Радар Жибера: Онлайн 🚕";
+        mqttClient.subscribe("radar_zhibera_v1/markers/#");
+    });
 
-    map.on('moveend', () => {
+    mqttClient.on('message', (topic, payload) => {
         try {
-            const c = map.getCenter();
-            localStorage.setItem('gibert_last_view', JSON.stringify({
-                lat: c.lat, lng: c.lng, zoom: map.getZoom()
-            }));
-        } catch (e) {}
+            const data = JSON.parse(payload.toString());
+            if (data.id) renderMarker(data);
+        } catch(e) {}
     });
 
-    const hybridLayer = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=ru', {
-        maxZoom: 20
-    });
-
-    const schemeLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19
-    });
-
-    let isHybrid = true;
-    hybridLayer.addTo(map);
-
-    document.getElementById('layerBtn').onclick = () => {
-        if (isHybrid) {
-            map.removeLayer(hybridLayer);
-            schemeLayer.addTo(map);
-            document.getElementById('layerBtn').innerText = '🗺️';
-        } else {
-            map.removeLayer(schemeLayer);
-            hybridLayer.addTo(map);
-            document.getElementById('layerBtn').innerText = '🛰️';
+    function renderMarker(m) {
+        if (renderedMarkers[m.id]) {
+            map.removeLayer(renderedMarkers[m.id]);
         }
-        isHybrid = !isHybrid;
-    };
+        
+        const age = (Date.now() / 1000 - m.timestamp) / 60;
+        if (age > 20) return;
 
-    let userLocationMarker = null;
-    let cachedCoords = null;
+        const icon = L.divIcon({
+            className: '',
+            html: `<div style="position:relative"><div class="dps-time-pill">${Math.round(age)} мин</div><div class="dps-badge">🚓</div></div>`,
+            iconSize: [30, 30]
+        });
 
-    function showUserOnMap(lat, lng) {
-        cachedCoords = { lat, lng, ts: Date.now() };
-        map.setView([lat, lng], 17);
-        if (userLocationMarker) {
-            userLocationMarker.setLatLng([lat, lng]);
-        } else {
-            userLocationMarker = L.circleMarker([lat, lng], {
-                radius: 8, color: '#fff', weight: 3, fillColor: '#3390ec', fillOpacity: 1
-            }).addTo(map).bindPopup("📍 Вы сейчас здесь");
-        }
+        renderedMarkers[m.id] = L.marker([m.lat, m.lng], { icon }).addTo(map).bindPopup(m.comment || "Комиссар рядом!");
     }
 
     function locateUser() {
-        if (cachedCoords && (Date.now() - cachedCoords.ts < 180000)) {
-            showUserOnMap(cachedCoords.lat, cachedCoords.lng);
-            return;
-        }
-
-        if (tg && tg.LocationManager && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) {
-            tg.LocationManager.init(() => {
-                if (tg.LocationManager.isLocationAvailable) {
-                    tg.LocationManager.getLocation((loc) => {
-                        if (loc && loc.latitude && loc.longitude) {
-                            showUserOnMap(loc.latitude, loc.longitude);
-                        }
-                    });
-                }
-            });
-            return;
-        }
-
         if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (pos) => showUserOnMap(pos.coords.latitude, pos.coords.longitude),
-                () => {},
-                { enableHighAccuracy: true, timeout: 7000, maximumAge: 300000 }
-            );
-        }
-    }
-
-    if (!hasSavedView) {
-        locateUser();
-    }
-    document.getElementById('locateBtn').onclick = locateUser;
-
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/[&<>"']/g, m => ({
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-        }[m]));
-    }
-
-    // Открытие именно КАРТОЧКИ ПРОФИЛЯ пользователя (с параметром ?profile), а не диалога ЛС!
-    window.openAuthorById = function(markerId) {
-        const entry = renderedMarkers[markerId];
-        if (!entry || !entry.data) return;
-        const m = entry.data;
-
-        if (m.author_username) {
-            const profileUrl = 'https://t.me/' + m.author_username + '?profile';
-            if (tg && typeof tg.openTelegramLink === 'function') {
-                tg.openTelegramLink(profileUrl);
-            } else {
-                window.open(profileUrl, '_blank');
-            }
-        } else if (m.author_id) {
-            const tgUri = 'tg://user?id=' + m.author_id + '&profile';
-            const a = document.createElement('a');
-            a.href = tgUri;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-    };
-
-    function calculateBearing(lat1, lng1, lat2, lng2) {
-        const toRad = d => d * Math.PI / 180;
-        const toDeg = r => r * 180 / Math.PI;
-        const dLng = toRad(lng2 - lng1);
-        const y = Math.sin(dLng) * Math.cos(toRad(lat2));
-        const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-                  Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng);
-        return Math.round((toDeg(Math.atan2(y, x)) + 360) % 360);
-    }
-
-    function formatMinutesAgo(timestamp) {
-        const diffSec = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
-        const mins = Math.floor(diffSec / 60);
-        if (mins === 0) return "только что";
-        return `${mins} мин. назад`;
-    }
-
-    function createDpsIcon(angle, standing, opacity = 1, timeText = null) {
-        const arrowSvg = standing ? '' : `
-            <svg class="dps-arrow" style="transform: rotate(${angle}deg);" viewBox="0 0 88 88">
-                <path d="M40.5 30 L40.5 14 L33 16.5 L44 1 L55 16.5 L47.5 14 L47.5 30 Z"
-                      fill="#ffeb3b" stroke="#111" stroke-width="1.8" stroke-linejoin="round"/>
-            </svg>
-        `;
-        const timePillHtml = timeText
-            ? `<div class="dps-time-pill ${standing ? 'standing-pos' : ''}">${timeText}</div>`
-            : '';
-
-        return L.divIcon({
-            className: '',
-            iconSize: [88, 88],
-            iconAnchor: [44, 44],
-            popupAnchor: [0, -22],
-            html: `
-                <div class="dps-marker-wrap" style="opacity: ${opacity};">
-                    ${timePillHtml}
-                    ${arrowSvg}
-                    <div class="dps-badge">🚓</div>
-                </div>
-            `
-        });
-    }
-
-    const renderedMarkers = {};
-    const votedMarkers = new Set();
-
-    function buildAuthorHtml(m) {
-        const name = escapeHtml(m.author_name || 'Участник');
-        const username = m.author_username ? escapeHtml(m.author_username) : '';
-        const uid = m.author_id;
-
-        if (username) {
-            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorById(${m.id})">@${username} ↗</button></div>`;
-        } else if (uid) {
-            return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: <button type="button" class="author-btn" onclick="openAuthorById(${m.id})">${name} (ID: ${uid}) ↗</button></div>`;
-        }
-        return `<div style="margin-top:5px; font-size:12px; color:#555;">👤 Автор: ${name}</div>`;
-    }
-
-    function buildPopupHtml(m) {
-        const statusText = m.standing ? "🛑 Эмильен стоит на месте" : "➡️ Ехали по стрелке";
-        const safeComment = escapeHtml(m.comment);
-        const commentHtml = safeComment ? `<div style="margin-top:4px; padding:4px 7px; background:#f3f4f6; border-radius:6px; font-size:12px; color:#333;">💬 ${safeComment}</div>` : '';
-        const authorHtml = buildAuthorHtml(m);
-        const voted = votedMarkers.has(m.id);
-
-        const buttonsHtml = voted
-            ? `<div style="margin-top:6px; font-size:12px; color:#2e7d32; font-weight:600;">✅ Спасибо, ваш голос учтен!</div>`
-            : `<div class="vote-row">
-                   <button class="vote-btn vote-yes" onclick="voteMarker(${m.id}, 'confirm')">👍 Ещё тут (${m.confirms || 1})</button>
-                   <button class="vote-btn vote-no" onclick="voteMarker(${m.id}, 'deny')">👎 Уехали (Фейк) (${m.denials || 0}/2)</button>
-               </div>`;
-
-        return `
-            <div style="font-size:14px; line-height:1.45; min-width:210px;">
-                <b>🚓 ${escapeHtml(m.car_model)}</b><br>
-                <span>${statusText}</span>
-                ${commentHtml}
-                ${authorHtml}
-                <div style="margin-top:4px; color:#666; font-size:12px;">🕒 Проверено: ${formatMinutesAgo(m.timestamp)}</div>
-                ${buttonsHtml}
-            </div>
-        `;
-    }
-
-    function renderOrUpdateMarker(m) {
-        if (!m || !m.id) return;
-        const ageMinutes = (Date.now() / 1000 - m.timestamp) / 60;
-        if (ageMinutes >= 20) {
-            removeMarkerFromMap(m.id);
-            return;
-        }
-        const opacity = Math.max(0.4, 1 - ageMinutes / 22);
-        const timeText = formatMinutesAgo(m.timestamp);
-
-        if (renderedMarkers[m.id]) {
-            const entry = renderedMarkers[m.id];
-            entry.data = m;
-            entry.marker.setIcon(createDpsIcon(m.angle, m.standing, opacity, timeText));
-            entry.marker.setPopupContent(buildPopupHtml(m));
-        } else {
-            const marker = L.marker([m.lat, m.lng], {
-                icon: createDpsIcon(m.angle, m.standing, opacity, timeText)
-            }).addTo(map);
-            marker.bindPopup(buildPopupHtml(m));
-            marker.on('popupopen', () => {
-                if (renderedMarkers[m.id]) {
-                    marker.setPopupContent(buildPopupHtml(renderedMarkers[m.id].data));
-                }
+            navigator.geolocation.getCurrentPosition(pos => {
+                map.setView([pos.coords.latitude, pos.coords.longitude], 17);
             });
-            renderedMarkers[m.id] = { marker, data: m };
         }
     }
-
-    function removeMarkerFromMap(id) {
-        if (renderedMarkers[id]) {
-            map.removeLayer(renderedMarkers[id].marker);
-            delete renderedMarkers[id];
-        }
-    }
-
-    setInterval(() => {
-        Object.values(renderedMarkers).forEach(entry => {
-            renderOrUpdateMarker(entry.data);
-        });
-    }, 20000);
-
-    // =====================================================================
-    // ДВОЙНАЯ СИНХРОНИЗАЦИЯ: Render + MQTT Relay (работает даже при блокировке Render провайдером!)
-    // =====================================================================
-    let ws = null;
-    let mqttClient = null;
-
-    // 1. Подключаем глобальный канал синхронизации меток (MQTT over WSS с поддержкой retained-сообщений)
-    if (window.mqtt) {
-        mqttClient = mqtt.connect(MQTT_BROKER, {
-            clientId: 'gibert_' + Math.random().toString(16).slice(2, 10),
-            clean: true,
-            reconnectPeriod: 3000
-        });
-        mqttClient.on('connect', () => {
-            mqttClient.subscribe(MQTT_TOPIC_PREFIX + '+');
-        });
-        mqttClient.on('message', (topic, payloadBuf) => {
-            const str = payloadBuf.toString();
-            const idPart = Number(topic.replace(MQTT_TOPIC_PREFIX, ''));
-            if (!str) {
-                if (idPart) removeMarkerFromMap(idPart);
-                return;
-            }
-            try {
-                const m = JSON.parse(str);
-                if (m.deleted || (m.denials && m.denials >= 2)) {
-                    removeMarkerFromMap(m.id || idPart);
-                } else {
-                    renderOrUpdateMarker(m);
-                }
-            } catch (e) {}
-        });
-    }
-
-    function publishMarkerToRelay(m, isDeleted = false) {
-        if (!mqttClient || !mqttClient.connected) return;
-        const topic = MQTT_TOPIC_PREFIX + m.id;
-        if (isDeleted) {
-            mqttClient.publish(topic, "", { qos: 0, retain: true });
-        } else {
-            mqttClient.publish(topic, JSON.stringify(m), { qos: 0, retain: true });
-        }
-    }
-
-    // 2. Параллельно пробуем подключиться к Render (для /stats и серверного хранения)
-    const isOnRenderHost = location.host.includes('onrender.com');
-    const apiBase = isOnRenderHost ? '' : RENDER_HTTP;
-    const wsUrl = isOnRenderHost
-        ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`
-        : RENDER_WS;
-
-    fetch(`${apiBase}/api/markers`)
-        .then(r => r.json())
-        .then(data => data.markers.forEach(renderOrUpdateMarker))
-        .catch(() => {});
-
-    try {
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-            const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
-            ws.send(JSON.stringify({
-                action: 'hello',
-                client_id: clientId,
-                init_data: tg ? (tg.initData || '') : '',
-                fallback_user: tgUser ? {
-                    id: tgUser.id,
-                    first_name: tgUser.first_name || '',
-                    last_name: tgUser.last_name || '',
-                    username: tgUser.username || ''
-                } : null
-            }));
-        };
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            if (msg.event === 'new_marker' || msg.event === 'update_marker') {
-                renderOrUpdateMarker(msg.marker);
-            } else if (msg.event === 'delete_marker') {
-                removeMarkerFromMap(msg.id);
-            }
-        };
-    } catch (e) {}
-
-    window.voteMarker = function(id, voteType) {
-        if (votedMarkers.has(id)) return;
-        votedMarkers.add(id);
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ action: 'vote_marker', id: id, vote: voteType }));
-        }
-
-        if (renderedMarkers[id]) {
-            const m = renderedMarkers[id].data;
-            if (voteType === 'confirm') {
-                m.confirms = (m.confirms || 1) + 1;
-                m.timestamp = Date.now() / 1000;
-                renderOrUpdateMarker(m);
-                publishMarkerToRelay(m, false);
-            } else if (voteType === 'deny') {
-                m.denials = (m.denials || 0) + 1;
-                if (m.denials >= 2) {
-                    removeMarkerFromMap(id);
-                    publishMarkerToRelay(m, true);
-                } else {
-                    renderOrUpdateMarker(m);
-                    publishMarkerToRelay(m, false);
-                }
-            }
-        }
-    };
-
-    // =====================================================================
-    // ЛОГИКА 2 КЛИКОВ: 1-й клик — точка машины, 2-й клик — куда поехала!
-    // =====================================================================
-    let previewMarker = null;
-    let directionLine = null;
-    let selectedLatLng = null;
-    let currentAngle = 45;
-    let selectedCar = "Lada Granta";
-
-    const banner = document.getElementById('banner');
-    const sheet = document.getElementById('sheet');
-    const standingCheck = document.getElementById('standingCheck');
-    const dirHint = document.getElementById('dirHint');
-    const commentInput = document.getElementById('commentInput');
-
-    map.on('click', (e) => {
-        if (!selectedLatLng) {
-            selectedLatLng = e.latlng;
-            standingCheck.checked = false;
-            previewMarker = L.marker(selectedLatLng, {
-                icon: createDpsIcon(currentAngle, false, 1, null)
-            }).addTo(map);
-
-            sheet.classList.add('open');
-            banner.innerText = "👉 Теперь нажмите на карту в ту сторону, куда она поехала!";
-            banner.classList.add('highlight');
-            dirHint.innerText = "👉 Кликните по дороге в сторону движения машины";
-        } else {
-            if (standingCheck.checked) {
-                standingCheck.checked = false;
-            }
-            currentAngle = calculateBearing(selectedLatLng.lat, selectedLatLng.lng, e.latlng.lat, e.latlng.lng);
-            previewMarker.setIcon(createDpsIcon(currentAngle, false, 1, null));
-
-            if (directionLine) map.removeLayer(directionLine);
-            directionLine = L.polyline([selectedLatLng, e.latlng], {
-                color: '#ffeb3b', weight: 3, dashArray: '6, 6'
-            }).addTo(map);
-
-            banner.innerText = "🎯 Направление указано! Выберите марку и нажмите Отправить";
-            banner.classList.remove('highlight');
-            dirHint.innerText = "✅ Направление задано (можете кликнуть в другое место, чтобы изменить)";
-        }
-    });
-
-    standingCheck.onchange = () => {
-        if (!previewMarker) return;
-        const standing = standingCheck.checked;
-        previewMarker.setIcon(createDpsIcon(currentAngle, standing, 1, null));
-        if (standing && directionLine) {
-            map.removeLayer(directionLine);
-            directionLine = null;
-        }
-        dirHint.innerText = standing
-            ? "🛑 Отмечено: Эмильен стоит на месте"
-            : "👉 Нажмите на карту в сторону, куда поехала машина";
-    };
-
-    document.querySelectorAll('.car-chip').forEach(btn => {
-        btn.onclick = () => {
-            document.querySelectorAll('.car-chip').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            selectedCar = btn.dataset.car;
-        };
-    });
-
-    document.querySelectorAll('.tag-btn').forEach(btn => {
-        btn.onclick = () => {
-            commentInput.value = btn.dataset.text;
-        };
-    });
-
-    function resetDraft() {
-        sheet.classList.remove('open');
-        if (previewMarker) { map.removeLayer(previewMarker); previewMarker = null; }
-        if (directionLine) { map.removeLayer(directionLine); directionLine = null; }
-        selectedLatLng = null;
-        commentInput.value = '';
-        banner.classList.remove('highlight');
-        banner.innerText = "👆 1-й клик по карте — где видели Комиссара";
-    }
-
-    document.getElementById('closeSheet').onclick = resetDraft;
-
-    document.getElementById('sendBtn').onclick = () => {
-        if (!selectedLatLng) return;
-
-        const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
-        const fullName = tgUser ? `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim() || 'Участник' : 'Гость';
-
-        const localMarker = {
-            id: Date.now(),
-            lat: selectedLatLng.lat,
-            lng: selectedLatLng.lng,
-            angle: currentAngle,
-            car_model: selectedCar,
-            standing: standingCheck.checked,
-            comment: (commentInput.value || '').trim().slice(0, 80),
-            author_id: tgUser ? tgUser.id : null,
-            author_name: fullName,
-            author_username: tgUser ? (tgUser.username || '') : '',
-            confirms: 1,
-            denials: 0,
-            timestamp: Date.now() / 1000
-        };
-
-        // Мгновенно отрисовываем и отправляем через резервный глобальный релей (работает у всех провайдеров РФ)
-        renderOrUpdateMarker(localMarker);
-        publishMarkerToRelay(localMarker, false);
-
-        // И параллельно отправляем на сервер Render
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                action: 'add_marker',
-                lat: localMarker.lat,
-                lng: localMarker.lng,
-                angle: localMarker.angle,
-                car_model: localMarker.car_model,
-                standing: localMarker.standing,
-                comment: localMarker.comment,
-                init_data: tg ? (tg.initData || '') : '',
-                fallback_user: tgUser ? {
-                    id: tgUser.id,
-                    first_name: tgUser.first_name || '',
-                    last_name: tgUser.last_name || '',
-                    username: tgUser.username || ''
-                } : null
-            }));
-        }
-
-        resetDraft();
-        banner.innerText = "✅ Метка опубликована! Другие уже видят её";
-    };
 </script>
 </body>
 </html>
