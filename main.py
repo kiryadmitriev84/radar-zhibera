@@ -10,6 +10,7 @@ from typing import Dict, List, Set, Tuple
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse
 import uvicorn
 from aiogram import Bot, Dispatcher, types
@@ -20,8 +21,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 # НАСТРОЙКИ
 # =====================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ВСТАВЬТЕ_СЮДА_ССЫЛКУ")
-# Если хотите, чтобы /stats видели только вы — можете добавить ADMIN_ID в Render (ваш Telegram ID)
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://kiryadmitriev-radar-zhibera.static.hf.space")
 ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
 MARKER_TTL_SECONDS = 20 * 60  # Жизнь метки — ровно 20 минут (1200 секунд)
 
@@ -163,7 +163,6 @@ async def start_bot():
 
         @dp.message(Command("stats"))
         async def cmd_stats(message: types.Message):
-            # Если задан ADMIN_ID, показываем статистику только владельцу
             if ADMIN_ID and message.from_user and str(message.from_user.id) != ADMIN_ID:
                 return
 
@@ -202,6 +201,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Разрешаем запросы с Hugging Face Static Space и любых зеркал
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/ping")
 async def ping():
@@ -231,7 +239,6 @@ async def websocket_endpoint(websocket: WebSocket):
             payload = json.loads(data)
             action = payload.get("action")
 
-            # Фиксация входа пользователя на карту для точной статистики /stats
             if action == "hello":
                 uid, _, _ = extract_telegram_author(
                     payload.get("init_data", ""),

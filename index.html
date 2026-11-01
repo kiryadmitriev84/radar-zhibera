@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Резервный канал синхронизации в реальном времени (если провайдер режет прямой доступ к onrender.com) -->
+    <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body, html { width: 100vw; height: 100vh; overflow: hidden; background: #18222d; }
@@ -195,13 +197,18 @@
 </div>
 
 <script>
+    // Основной сервер Render + синхронизация через глобальный WebSocket-канал (работает без VPN у всех провайдеров РФ!)
+    const RENDER_HTTP = "https://radar-zhibera.onrender.com";
+    const RENDER_WS = "wss://radar-zhibera.onrender.com/ws";
+    const MQTT_BROKER = "wss://broker.emqx.io:8084/mqtt";
+    const MQTT_TOPIC_PREFIX = "radar_zhibera_v1/markers/";
+
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
     if (tg) {
         tg.ready();
         tg.expand();
     }
 
-    // Уникальный анонимный ключ браузера (на случай входа без аккаунта) для статистики
     let clientId = '';
     try {
         clientId = localStorage.getItem('gibert_cid') || '';
@@ -323,7 +330,6 @@
         const m = entry.data;
 
         if (m.author_username) {
-            // Официальный параметр ?profile открывает именно страницу профиля (Инфо/Аватарку), а не чат!
             const profileUrl = 'https://t.me/' + m.author_username + '?profile';
             if (tg && typeof tg.openTelegramLink === 'function') {
                 tg.openTelegramLink(profileUrl);
@@ -331,7 +337,6 @@
                 window.open(profileUrl, '_blank');
             }
         } else if (m.author_id) {
-            // Для пользователей без @username вызываем tg://user?id=...&profile
             const tgUri = 'tg://user?id=' + m.author_id + '&profile';
             const a = document.createElement('a');
             a.href = tgUri;
@@ -427,6 +432,7 @@
     }
 
     function renderOrUpdateMarker(m) {
+        if (!m || !m.id) return;
         const ageMinutes = (Date.now() / 1000 - m.timestamp) / 60;
         if (ageMinutes >= 20) {
             removeMarkerFromMap(m.id);
@@ -467,43 +473,113 @@
         });
     }, 20000);
 
-    fetch('/api/markers')
-        .then(r => r.json())
-        .then(data => data.markers.forEach(renderOrUpdateMarker));
+    // =====================================================================
+    // ДВОЙНАЯ СИНХРОНИЗАЦИЯ: Render + MQTT Relay (работает даже при блокировке Render провайдером!)
+    // =====================================================================
+    let ws = null;
+    let mqttClient = null;
 
-    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+    // 1. Подключаем глобальный канал синхронизации меток (MQTT over WSS с поддержкой retained-сообщений)
+    if (window.mqtt) {
+        mqttClient = mqtt.connect(MQTT_BROKER, {
+            clientId: 'gibert_' + Math.random().toString(16).slice(2, 10),
+            clean: true,
+            reconnectPeriod: 3000
+        });
+        mqttClient.on('connect', () => {
+            mqttClient.subscribe(MQTT_TOPIC_PREFIX + '+');
+        });
+        mqttClient.on('message', (topic, payloadBuf) => {
+            const str = payloadBuf.toString();
+            const idPart = Number(topic.replace(MQTT_TOPIC_PREFIX, ''));
+            if (!str) {
+                if (idPart) removeMarkerFromMap(idPart);
+                return;
+            }
+            try {
+                const m = JSON.parse(str);
+                if (m.deleted || (m.denials && m.denials >= 2)) {
+                    removeMarkerFromMap(m.id || idPart);
+                } else {
+                    renderOrUpdateMarker(m);
+                }
+            } catch (e) {}
+        });
+    }
 
-    ws.onopen = () => {
-        const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
-        ws.send(JSON.stringify({
-            action: 'hello',
-            client_id: clientId,
-            init_data: tg ? (tg.initData || '') : '',
-            fallback_user: tgUser ? {
-                id: tgUser.id,
-                first_name: tgUser.first_name || '',
-                last_name: tgUser.last_name || '',
-                username: tgUser.username || ''
-            } : null
-        }));
-    };
-
-    ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.event === 'new_marker' || msg.event === 'update_marker') {
-            renderOrUpdateMarker(msg.marker);
-        } else if (msg.event === 'delete_marker') {
-            removeMarkerFromMap(msg.id);
+    function publishMarkerToRelay(m, isDeleted = false) {
+        if (!mqttClient || !mqttClient.connected) return;
+        const topic = MQTT_TOPIC_PREFIX + m.id;
+        if (isDeleted) {
+            mqttClient.publish(topic, "", { qos: 0, retain: true });
+        } else {
+            mqttClient.publish(topic, JSON.stringify(m), { qos: 0, retain: true });
         }
-    };
+    }
+
+    // 2. Параллельно пробуем подключиться к Render (для /stats и серверного хранения)
+    const isOnRenderHost = location.host.includes('onrender.com');
+    const apiBase = isOnRenderHost ? '' : RENDER_HTTP;
+    const wsUrl = isOnRenderHost
+        ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`
+        : RENDER_WS;
+
+    fetch(`${apiBase}/api/markers`)
+        .then(r => r.json())
+        .then(data => data.markers.forEach(renderOrUpdateMarker))
+        .catch(() => {});
+
+    try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+            ws.send(JSON.stringify({
+                action: 'hello',
+                client_id: clientId,
+                init_data: tg ? (tg.initData || '') : '',
+                fallback_user: tgUser ? {
+                    id: tgUser.id,
+                    first_name: tgUser.first_name || '',
+                    last_name: tgUser.last_name || '',
+                    username: tgUser.username || ''
+                } : null
+            }));
+        };
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.event === 'new_marker' || msg.event === 'update_marker') {
+                renderOrUpdateMarker(msg.marker);
+            } else if (msg.event === 'delete_marker') {
+                removeMarkerFromMap(msg.id);
+            }
+        };
+    } catch (e) {}
 
     window.voteMarker = function(id, voteType) {
         if (votedMarkers.has(id)) return;
         votedMarkers.add(id);
-        ws.send(JSON.stringify({ action: 'vote_marker', id: id, vote: voteType }));
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'vote_marker', id: id, vote: voteType }));
+        }
+
         if (renderedMarkers[id]) {
-            renderedMarkers[id].marker.setPopupContent(buildPopupHtml(renderedMarkers[id].data));
+            const m = renderedMarkers[id].data;
+            if (voteType === 'confirm') {
+                m.confirms = (m.confirms || 1) + 1;
+                m.timestamp = Date.now() / 1000;
+                renderOrUpdateMarker(m);
+                publishMarkerToRelay(m, false);
+            } else if (voteType === 'deny') {
+                m.denials = (m.denials || 0) + 1;
+                if (m.denials >= 2) {
+                    removeMarkerFromMap(id);
+                    publishMarkerToRelay(m, true);
+                } else {
+                    renderOrUpdateMarker(m);
+                    publishMarkerToRelay(m, false);
+                }
+            }
         }
     };
 
@@ -595,23 +671,48 @@
         if (!selectedLatLng) return;
 
         const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+        const fullName = tgUser ? `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim() || 'Участник' : 'Гость';
 
-        ws.send(JSON.stringify({
-            action: 'add_marker',
+        const localMarker = {
+            id: Date.now(),
             lat: selectedLatLng.lat,
             lng: selectedLatLng.lng,
             angle: currentAngle,
             car_model: selectedCar,
             standing: standingCheck.checked,
-            comment: commentInput.value,
-            init_data: tg ? (tg.initData || '') : '',
-            fallback_user: tgUser ? {
-                id: tgUser.id,
-                first_name: tgUser.first_name || '',
-                last_name: tgUser.last_name || '',
-                username: tgUser.username || ''
-            } : null
-        }));
+            comment: (commentInput.value || '').trim().slice(0, 80),
+            author_id: tgUser ? tgUser.id : null,
+            author_name: fullName,
+            author_username: tgUser ? (tgUser.username || '') : '',
+            confirms: 1,
+            denials: 0,
+            timestamp: Date.now() / 1000
+        };
+
+        // Мгновенно отрисовываем и отправляем через резервный глобальный релей (работает у всех провайдеров РФ)
+        renderOrUpdateMarker(localMarker);
+        publishMarkerToRelay(localMarker, false);
+
+        // И параллельно отправляем на сервер Render
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                action: 'add_marker',
+                lat: localMarker.lat,
+                lng: localMarker.lng,
+                angle: localMarker.angle,
+                car_model: localMarker.car_model,
+                standing: localMarker.standing,
+                comment: localMarker.comment,
+                init_data: tg ? (tg.initData || '') : '',
+                fallback_user: tgUser ? {
+                    id: tgUser.id,
+                    first_name: tgUser.first_name || '',
+                    last_name: tgUser.last_name || '',
+                    username: tgUser.username || ''
+                } : null
+            }));
+        }
+
         resetDraft();
         banner.innerText = "✅ Метка опубликована! Другие уже видят её";
     };
