@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse
 import uvicorn
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
@@ -85,7 +85,7 @@ def extract_telegram_author(init_data: str, fallback_user: dict | None) -> Tuple
 
     if isinstance(fallback_user, dict) and fallback_user.get("id"):
         uid = fallback_user.get("id")
-        full_name = f"{fallback_user.get('first_name', '')} {fallback_user.get('last_name', '')}".strip() or "Участник"
+        full_name = f"{fallback_user.get('first_name', '')} {fallback_user.get('last_name', '')}\".strip() or "Участник"
         username = fallback_user.get("username", "")
         return uid, full_name, username
 
@@ -132,6 +132,19 @@ def format_uptime() -> str:
     return f"{hours} ч. {mins} мин."
 
 
+DONATE_TEXT = (
+    "💎 <b>Поддержать проект «Радар Жибера»</b>\n"
+    "<i>Нажмите на адрес кошелька, чтобы скопировать его в 1 касание:</i>\n\n"
+    "🟢 <b>₮ USDT (TRC20):</b>\n"
+    "<code>TVT2dMdtDfb8pb1Aub2rtn32sqWJMQto4g</code>\n\n"
+    "🟣 <b>Ξ ETH (ERC20):</b>\n"
+    "<code>0x5A59Fa4077FE7430A3B180242508b5EcBCC391B2</code>\n\n"
+    "🟠 <b>₿ BTC (Bitcoin):</b>\n"
+    "<code>bc1qvaujm5xqm3eaxzqhqgrlgad8mpqqypuqpmrpz5</code>\n\n"
+    "Спасибо за поддержку! 🚕"
+)
+
+
 async def start_bot():
     if BOT_TOKEN.startswith("ВСТАВЬТЕ") or not BOT_TOKEN:
         return
@@ -144,10 +157,20 @@ async def start_bot():
             if message.from_user:
                 register_user_visit(f"tg_{message.from_user.id}")
 
+            # Если перешли по прямой ссылке ?start=donate — сразу показываем реквизиты
+            args = message.text.split(maxsplit=1)[1] if message.text and len(message.text.split()) > 1 else ""
+            if args == "donate":
+                await message.answer(DONATE_TEXT, parse_mode="HTML")
+                return
+
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🚓 Открыть Радар Жибера",
                     web_app=WebAppInfo(url=WEBAPP_URL)
+                )],
+                [InlineKeyboardButton(
+                    text="💎 Поддержать проект",
+                    callback_data="show_donate"
                 )]
             ])
             await message.answer(
@@ -159,6 +182,16 @@ async def start_bot():
                 reply_markup=kb,
                 parse_mode="HTML"
             )
+
+        @dp.callback_query(F.data == "show_donate")
+        async def on_donate_click(callback: types.CallbackQuery):
+            await callback.answer()
+            if callback.message:
+                await callback.message.answer(DONATE_TEXT, parse_mode="HTML")
+
+        @dp.message(Command("donate"))
+        async def cmd_donate(message: types.Message):
+            await message.answer(DONATE_TEXT, parse_mode="HTML")
 
         @dp.message(Command("stats"))
         async def cmd_stats(message: types.Message):
