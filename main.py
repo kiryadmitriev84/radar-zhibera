@@ -77,7 +77,9 @@ def extract_telegram_author(init_data: str, fallback_user: dict | None) -> Tuple
                 if valid:
                     u = json.loads(user_json)
                     uid = u.get("id")
-                    full_name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Участник"
+                    first = u.get("first_name", "")
+                    last = u.get("last_name", "")
+                    full_name = f"{first} {last}".strip() or "Участник"
                     username = u.get("username", "")
                     return uid, full_name, username
         except Exception:
@@ -85,7 +87,9 @@ def extract_telegram_author(init_data: str, fallback_user: dict | None) -> Tuple
 
     if isinstance(fallback_user, dict) and fallback_user.get("id"):
         uid = fallback_user.get("id")
-        full_name = f"{fallback_user.get('first_name', '')} {fallback_user.get('last_name', '')}\".strip() or "Участник"
+        first = fallback_user.get("first_name", "")
+        last = fallback_user.get("last_name", "")
+        full_name = f"{first} {last}".strip() or "Участник"
         username = fallback_user.get("username", "")
         return uid, full_name, username
 
@@ -152,12 +156,17 @@ async def start_bot():
         bot = Bot(token=BOT_TOKEN)
         dp = Dispatcher()
 
+        # Регистрируем меню команд в самом Telegram (слева внизу поля ввода)
+        await bot.set_my_commands([
+            types.BotCommand(command="start", description="🚓 Открыть Радар Жибера"),
+            types.BotCommand(command="donate", description="💎 Поддержать проект"),
+        ])
+
         @dp.message(CommandStart())
         async def cmd_start(message: types.Message):
             if message.from_user:
                 register_user_visit(f"tg_{message.from_user.id}")
 
-            # Если перешли по прямой ссылке ?start=donate — сразу показываем реквизиты
             args = message.text.split(maxsplit=1)[1] if message.text and len(message.text.split()) > 1 else ""
             if args == "donate":
                 await message.answer(DONATE_TEXT, parse_mode="HTML")
