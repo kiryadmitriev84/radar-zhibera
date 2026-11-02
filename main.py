@@ -139,14 +139,27 @@ def format_uptime() -> str:
 DONATE_TEXT = (
     "💎 <b>Поддержать проект «Радар Жибера»</b>\n"
     "<i>Нажмите на адрес кошелька, чтобы скопировать его в 1 касание:</i>\n\n"
-    "🟢 <b>₮ USDT (TRC20):</b>\n"
+    "🟢 <b>USDT (TRC20):</b>\n"
     "<code>TVT2dMdtDfb8pb1Aub2rtn32sqWJMQto4g</code>\n\n"
-    "🟣 <b>Ξ ETH (ERC20):</b>\n"
+    "🟣 <b>ETH (ERC20):</b>\n"
     "<code>0x5A59Fa4077FE7430A3B180242508b5EcBCC391B2</code>\n\n"
-    "🟠 <b>₿ BTC (Bitcoin):</b>\n"
+    "🟠 <b>BTC (Bitcoin):</b>\n"
     "<code>bc1qvaujm5xqm3eaxzqhqgrlgad8mpqqypuqpmrpz5</code>\n\n"
     "Спасибо за поддержку! 🚕"
 )
+
+
+def get_main_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🚓 Открыть Радар Жибера",
+            web_app=WebAppInfo(url=WEBAPP_URL)
+        )],
+        [InlineKeyboardButton(
+            text="💎 Поддержать проект",
+            callback_data="show_donate"
+        )]
+    ])
 
 
 async def start_bot():
@@ -169,26 +182,16 @@ async def start_bot():
 
             args = message.text.split(maxsplit=1)[1] if message.text and len(message.text.split()) > 1 else ""
             if args == "donate":
-                await message.answer(DONATE_TEXT, parse_mode="HTML")
+                await message.answer(DONATE_TEXT, reply_markup=get_main_kb(), parse_mode="HTML")
                 return
 
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🚓 Открыть Радар Жибера",
-                    web_app=WebAppInfo(url=WEBAPP_URL)
-                )],
-                [InlineKeyboardButton(
-                    text="💎 Поддержать проект",
-                    callback_data="show_donate"
-                )]
-            ])
             await message.answer(
                 "👋 <b>Добро пожаловать в Радар Жибера!</b> 🚕\n\n"
                 "Операция «Кобра» в прямом эфире! Нажмите кнопку ниже, чтобы открыть живую карту:\n"
                 "• Смотрите, где сейчас Комиссар и Эмильен и куда они направляются\n"
                 "• Ставьте метку и направление в 2 касания\n\n"
                 "<i>Создано исключительно в развлекательных целях по мотивам фильма «Такси».</i>",
-                reply_markup=kb,
+                reply_markup=get_main_kb(),
                 parse_mode="HTML"
             )
 
@@ -196,11 +199,11 @@ async def start_bot():
         async def on_donate_click(callback: types.CallbackQuery):
             await callback.answer()
             if callback.message:
-                await callback.message.answer(DONATE_TEXT, parse_mode="HTML")
+                await callback.message.answer(DONATE_TEXT, reply_markup=get_main_kb(), parse_mode="HTML")
 
         @dp.message(Command("donate"))
         async def cmd_donate(message: types.Message):
-            await message.answer(DONATE_TEXT, parse_mode="HTML")
+            await message.answer(DONATE_TEXT, reply_markup=get_main_kb(), parse_mode="HTML")
 
         @dp.message(Command("stats"))
         async def cmd_stats(message: types.Message):
